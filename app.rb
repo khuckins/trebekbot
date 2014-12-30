@@ -153,6 +153,9 @@ end
 
 def mark_last_answer_as_correct(params)
   score = update_score(last_user_answered, previous_question["value"])
+  user_score = get_user_score(last_user_answered)
+  reply = "#{get_slack_name(last_user_answered)}'s, your score is now #{currency_format(user_score)}."
+  json_response_for_slack(reply)
 end
 
 def respond_with_user_score(user_id)
