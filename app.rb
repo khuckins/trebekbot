@@ -43,6 +43,8 @@ post "/" do
     response = respond_with_user_score(params[:user_id])
   elsif params[:text].match(/^end game/i)
     response = clear_leaderboard
+  elsif params[:text].match(/^last answer was correct/i)
+    response = mark_last_answer_as_correct(params)
   elsif params[:text].match(/^help$/i)
     response = respond_with_help
   elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
@@ -149,6 +151,10 @@ def mark_question_as_answered(channel_id)
   end
 end
 
+def mark_last_answer_as_correct(params)
+  score = update_score(last_user_answered, previous_question["value"])
+end
+
 def respond_with_user_score(user_id)
   user_score = get_user_score(user_id)
   reply = "#{get_slack_name(user_id)}, your score is #{currency_format(user_score)}."
@@ -168,6 +174,7 @@ end
 def update_score(user_id, score = 0)
   key = "user_score:#{user_id}"
   user_score = $redis.get(key)
+  last_user_answered = user_id
   if user_score.nil?
     $redis.set(key, score)
     score
