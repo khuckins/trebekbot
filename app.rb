@@ -41,6 +41,8 @@ post "/" do
     response = respond_with_question(params)
   elsif params[:text].match(/my score$/i)
     response = respond_with_user_score(params[:user_id])
+  elsif params[:text].match(/^end game/i)
+    response = clear_leaderboard
   elsif params[:text].match(/^help$/i)
     response = respond_with_help
   elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
@@ -65,7 +67,7 @@ end
 
 def respond_with_question(params)
   channel_id = params[:channel_id]
-  unless $redis.exists("shush:#{channel_id}")
+  unless $redis.exists("shush:question:#{channel_id}")
     response = get_question
     response["value"] = 200 if response["value"].nil?
     response["answer"] = Sanitize.fragment(response["answer"].gsub(/\s+(&nbsp;|&)\s+/i, " and "))
@@ -81,7 +83,7 @@ def respond_with_question(params)
     puts "[LOG] ID: #{response["id"]} | Category: #{response["category"]["title"]} | Question: #{response["question"]} | Answer: #{response["answer"]} | Value: #{response["value"]}"
     $redis.pipelined do
       $redis.set(key, response.to_json)
-      $redis.setex("shush:#{channel_id}", 5, "true")
+      $redis.setex("shush:question:#{channel_id}", 5, "true")
     end
     json_response_for_slack(question)
   end
@@ -91,7 +93,7 @@ def process_answer(params)
   channel_id = params[:channel_id]
   key = "current_question:#{channel_id}"
   current_question = $redis.get(key)
-  if current_question.nil? && !$redis.exists("shush:#{channel_id}")
+  if current_question.nil? && !$redis.exists("shush:answer:#{channel_id}")
     reply = trebek_me
   else
     current_question = JSON.parse(current_question)
@@ -143,7 +145,7 @@ end
 def mark_question_as_answered(channel_id)
   $redis.pipelined do
     $redis.del("current_question:#{channel_id}")
-    $redis.setex("shush:#{channel_id}", 5, "true")
+    $redis.setex("shush:answer:#{channel_id}", 5, "true")
   end
 end
 
@@ -174,6 +176,11 @@ def update_score(user_id, score = 0)
     $redis.set(key, new_score)
     new_score
   end
+end
+
+def clear_leaderboard
+  $redis.flushdb
+  json_response_for_slack("Thank you for being with us. Goodnight everybody.")
 end
 
 def get_slack_name(user_id, options = {})
