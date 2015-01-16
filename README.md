@@ -4,9 +4,13 @@ A Jeopardy! bot for Slack, powered by the [jService](http://jservice.io/) API. S
 
 ![](http://i.imgur.com/BjMDf6Z.png)
 
+## Requirements
+
+You'll need a [Slack](https://slack.com) account, obviously, and a free [Heroku](https://www.heroku.com/) account to host the bot. You'll also need to be able to set up new integrations in Slack; if you're not able to do this, contact someone with admin access in your organization.
+
 ## Installation
 
-1. Set up a Slack outgoing webhook at https://my.slack.com/services/new. Make sure to pick a trigger word, such as `trebekbot`. You might also want to set this up in a single room, if you value your team's productivity.
+1. Set up a Slack outgoing webhook at https://slack.com/services/new/outgoing-webhook. Make sure to pick a trigger word, such as `trebekbot`. You might also want to set this up in a single room, if you value your team's productivity.
 
 2. Grab the token for the outgoing webhook you just created, and a Slack API token, which you can get from https://api.slack.com/web.
 
@@ -22,16 +26,12 @@ If you'd rather do it manually, then just clone this repo, set up a Heroku app w
 * `trebekbot what/who is/are [answer]`: sends an answer. Remember, responses must be in the form of a question!
 * `trebekbot what's my score`: shows your current score.
 * `trebekbot show the leaderboard`: shows the current top scores.
+<<<<<<< HEAD
 * `trebekbot end game`: clears all player scores.
+=======
+* `trebekbot show the loserboard`: shows the current bottom scores.
+>>>>>>> upstream/master
 * `trebekbot help`: shows this help information.
-
-## To-do
-
-I literally built this in 20 minutes, so there's a lot to do.
-
-* Better matching of answers (it's very strict)
-* Speak out the answers after time runs out
-* Let users select category and scores
 
 ## Credits & acknowledgements
 
@@ -44,6 +44,8 @@ Big thanks to [Steve Ottenad](https://github.com/sottenad) for building [jServic
 3. Commit your changes (`git commit -am 'Added some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
 5. Create new Pull Request
+
+Feel free to open a new issue if you have questions, concerns, bugs, or feature requests. Just remember that I'm doing this for fun, for free, in my free time, and I may not be able to help you, respond in a timely manner, or implement any feature requests.
 
 ## License 
 
