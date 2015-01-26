@@ -157,7 +157,7 @@ def process_answer(params)
       reply = "You had your chance, #{get_slack_name(user_id)}. Let someone else answer."
     elsif params["timestamp"].to_f > current_question["expiration"]
       if is_correct_answer?(current_answer, user_answer)
-        reply = "That is correct, #{get_slack_name(user_id)}, but time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
+        reply = "That is correct, #{get_slack_name(user_id)}, but time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer.The correct answer was `#{current_question["answer"]}`."
       else
         reply = "Time's up, #{get_slack_name(user_id)}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
       end
@@ -207,12 +207,17 @@ end
 # Strips leading/trailing whitespace and downcases.
 # Finally, if the match is not exact, uses White similarity algorithm for "fuzzy" matching,
 # to account for typos, etc.
+# Checks both the sanitized correct, and correct with parentheticals removed, e.g.
+# "The Pope (Benedict XVI)" checks answer against "pope benedict xvi" and "pope"
 # 
 def is_correct_answer?(correct, answer)
-  correct = correct.gsub(/[^\w\s]/i, "")
-            .gsub(/^(the|a|an) /i, "")
+  correct = correct.gsub(/^(the|a|an) /i, "")
             .strip
             .downcase
+
+  correct_no_parenthetical = correct.gsub(/\(.*\)/, "").gsub(/[^\w\s]/i, "").strip
+  correct_sanitized = correct.gsub(/[^\w\s]/i, "")
+
   answer = answer
            .gsub(/\s+(&nbsp;|&)\s+/i, " and ")
            .gsub(/[^\w\s]/i, "")
@@ -222,10 +227,15 @@ def is_correct_answer?(correct, answer)
            .gsub(/\?+$/, "")
            .strip
            .downcase
-  white = Text::WhiteSimilarity.new
-  similarity = white.similarity(correct, answer)
-  puts "[LOG] Correct answer: #{correct} | User answer: #{answer} | Similarity: #{similarity}"
-  correct == answer || similarity >= ENV["SIMILARITY_THRESHOLD"].to_f
+  [correct_sanitized, correct_no_parenthetical].each do |solution|
+    white = Text::WhiteSimilarity.new
+    similarity = white.similarity(solution, answer)
+    puts "[LOG] Correct answer: #{solution} | User answer: #{answer} | Similarity: #{similarity}"
+    if solution == answer || similarity >= ENV["SIMILARITY_THRESHOLD"].to_f
+      return true
+    end
+  end
+  false
 end
 
 # Marks question as answered by:
