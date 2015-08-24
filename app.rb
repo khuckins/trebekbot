@@ -7,6 +7,8 @@ require "dotenv"
 require "text"
 require "sanitize"
 require "date"
+require 'concurrent'
+require 'rest-client'
 
 configure do
   # Load .env vars
@@ -86,6 +88,18 @@ def json_response_for_slack(reply)
   response.to_json
 end
 
+def send_reply_to_slack(channel_id, text)
+  payload = {}
+  payload["channel_id"] = channel_id
+  payload["text"] = text
+  payload["username"] = ENV["BOT_USERNAME"] unless ENV["BOT_USERNAME"].nil?
+  payload["icon_emoji"] = ENV["BOT_ICON"] unless ENV["BOT_ICON"].nil?
+  puts "[LOG] Sending message to slack #{payload.to_json}"
+  if !ENV["SLACK_INCOMING_URI"].nil?
+    RestClient.post ENV["SLACK_INCOMING_URI"], payload.to_json, :content_type => :json, :accept => :json
+  end
+end
+
 # Determines if a game of Jeopardy is allowed in the given channel
 #
 def is_channel_blacklisted?(channel_name)
@@ -120,6 +134,7 @@ def respond_with_question(params, category = nil, value = nil, random_question =
       rand > ENV["DD_CHANCE"].to_i ? dd = false : dd = true
     end
     question = handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd)
+    start_timer(channel_id, response)
   end
   question
 end
@@ -321,6 +336,24 @@ def fetch_categories(count = ENV['DEFAULT_CATEGORY_COUNT'].to_i)
   uri = "http://jservice.io/api/categories?count=#{count}&offset=#{1+rand(max_category/count.to_f)}"
   request = HTTParty.get(uri)
   data = JSON.parse(request.body)
+end
+
+def start_timer(channel_id, response)
+  Concurrent::ScheduledTask.execute(ENV["SECONDS_TO_ANSWER"]){ end_round(channel_id, response) }
+end
+
+def end_round(channel_id, response)
+  puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
+  # make sure the current question is the same one we were waiting for
+  key = "current_question:#{channel_id}"
+  current_question = $redis.get(key)
+  current_question = JSON.parse(current_question)
+  if response["id"] == current_question["id"]
+    reply = "Time's up! The correct answer is `#{current_question["answer"]}`."
+    puts "[LOG] sending reply: #{reply}"
+    send_reply_to_slack(channel_id, reply)
+    mark_question_as_answered(channel_id)
+  end
 end
 
 # Returns existing categories or generates new ones
@@ -751,6 +784,20 @@ def get_slack_names_hash(user_id)
     names = { :id => user_id, :name => "Sean Connery" }
   end
   names
+end
+
+# When the round's time expires, mark the question as answered
+def round_time_expired(channel_id)
+  key = "current_question:#{channel_id}"
+  current_question = $redis.get(key)
+  if !current_question.nil?
+    current_question = JSON.parse(current_question)
+    current_answer = current_question["answer"]
+    mark_question_as_answered(channel_id)
+    reponse = "The correct answer is `#{current_answer}`."
+  end
+  status 200
+  body json_response_for_slack(response)
 end
 
 # Speaks the top scores across Slack.
