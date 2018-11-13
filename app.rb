@@ -45,7 +45,8 @@ post "/" do
     elsif is_channel_blacklisted?(params[:channel_name])
       response = "Sorry, can't play in this channel."
     elsif params[:text].match(/^jeopardy me/i)
-      response = respond_with_question(params)
+      response = respond_with_random_question(params)
+      #response = respond_with_question(params)
     elsif params[:text].match(/my score$/i)
       response = respond_with_user_score(params[:user_id], params[:user_name])
     elsif params[:text].match(/^end game/i)
@@ -57,11 +58,11 @@ post "/" do
     elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
       response = respond_with_loserboard(params)
     elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
-      response = respond_with_categories
-    elsif matches = params[:text].match(/^I'll take (.*)/i)
-      response = respond_with_question(params, matches[1])
+      response = respond_with_categories(params)
+    elsif params[:text].match(/^let's play$/i)
+      response = respond_with_categories(params)
     elsif matches = params[:text].match(/^I'll take (.*) for (.*)/i)
-      response = respond_with_question(params, matches[1], matches[3])
+      response = respond_with_question(params, matches[1], matches[2])
     elsif params[:text].match(/^Throw (.*) at (.*)/i)
       response = "Do I look like zorkbot?"
     else
@@ -96,14 +97,14 @@ end
 # speaks the category, value, and the new question, and shushes the bot for 5 seconds
 # (this is so two or more users can't do `jeopardy me` within 5 seconds of each other.)
 #
-def respond_with_question(params, category = nil, value = nil)
+def respond_with_random_question(params, category = nil, value = nil)
   channel_id = params[:channel_id]
   question = ""
   unless $redis.exists("shush:question:#{channel_id}")
     if !value_set.include?(value)
       value = value_set.sample
     end
-    response = get_question(category, value)
+    response = get_random_question(category, value)
     question = response["question"]
 
     key = "current_question:#{channel_id}"
@@ -123,6 +124,89 @@ def respond_with_question(params, category = nil, value = nil)
   question
 end
 
+def respond_with_question(params, category = nil, value = nil)
+  channel_id = params[:channel_id]
+  catkey = "current_categories:#{channel_id}" # We'll need to match the categories
+  question = ""
+  unless $redis.exists("shush:question:#{channel_id}")
+    if value.nil?
+      question = "Typically, you would want to select a question on the board, not just a category."
+    elsif category.nil?
+      question = "And what question in what category would you like me to ask?"
+    else
+      cat_response = compare_category(catkey, category)
+      return "That category isn't on the board." if cat_response == false
+      val_response = compare_value(catkey, category, value)
+      return "That question is no longer on the board." if val_response == false
+      response = fetch_question(catkey, category, value)
+      question = response["question"]
+
+      remove_val_from_category(catkey, category, value)
+
+      key = "current_question:#{channel_id}"
+      previous_question = $redis.get(key)
+      if !previous_question.nil?
+        previous_question = JSON.parse(previous_question)["answer"]
+        question = "The answer is `#{previous_question}`.\n"
+      end
+      date = Date.parse(response["airdate"])
+      question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}, from `#{date.strftime("%Y")}`: `#{response["question"]}`"
+      $redis.pipelined do
+        $redis.set(key, response.to_json)
+        $redis.setex("shush:question:#{channel_id}", 10, "true")
+        $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
+      end
+    end
+  end
+  question
+end
+
+def compare_category(key, category)
+  categories = return_categories(key)
+  match = false
+  category_titles = return_cat_data(categories, 'title')
+
+  category_titles.each do |title|
+    if (title == category)
+      match = true
+    end
+  end
+  match
+end
+
+def compare_value(key, cat, val)
+  category = return_categories(key).select {|c| c['title'] == cat}[0]
+  match = false
+
+  category['values'].each do |value|
+    if (val == value)
+      match = true
+    end
+  end
+  match
+end
+
+def fetch_question(key = nil, cat = nil, value = nil)
+  if !key.nil?
+    category = return_categories(key).select {|c| c['title'] == cat}[0]
+    offset = rand(category['clues_count'])
+    uri = "http://jservice.io/api/clues?category=#{category['id']}&value=#{value}&offset=#{offset}"
+  end
+  request = HTTParty.get(uri)
+  response = JSON.parse(request.body).first
+  question = response["question"]
+
+  if question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
+    response = "Surprise Round! Instead of the question you took, we'll ask you this. "
+    response += get_random_question(category, value)
+  end
+  response["value"] = 200 if response["value"].nil?
+  response["answer"] = Sanitize.fragment(response["answer"].gsub(/\s+(&nbsp;|&)\s+/i, " and "))
+  response["expiration"] = params["timestamp"].to_f + ENV["SECONDS_TO_ANSWER"].to_f
+  response
+end
+
+
 # Gets a random answer from the jService API, and does some cleanup on it:
 # If the question is not present, requests another one
 # If the answer doesn't have a value, sets a default of $200
@@ -135,17 +219,12 @@ end
 # If there's HTML in the answer, sanitizes it (otherwise it won't match the user answer)
 # Adds an "expiration" value, which is the timestamp of the Slack request + the seconds to answer config var
 #
-def get_question(category_key = nil, value = nil)
-  puts "VALUE #{value} | CATEGORY #{category_key}"
+def get_random_question(category_key = nil, value = nil)
 	if !category_key.nil?
     data = $redis.get("category:#{category_key}")
     category = JSON.parse(data)
   	offset = rand(category['clues_count'])
-    if !value
-      uri = "http://jservice.io/api/clues?category=#{category['id']}&offset=#{offset}"
-    else
-      uri = "http://jservice.io/api/clues?category=#{category['id']}&value=#{value}&offset=#{offset}"
-    end
+    uri = "http://jservice.io/api/clues?category=#{category['id']}&offset=#{offset}"
   else
     uri = "http://jservice.io/api/random?count=1"
   end
@@ -154,7 +233,7 @@ def get_question(category_key = nil, value = nil)
   question = response["question"]
 
   if question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
-    response = get_question(category, value)
+    response = get_random_question(category, value)
   end
   response["value"] = 200 if response["value"].nil?
   response["answer"] = Sanitize.fragment(response["answer"].gsub(/\s+(&nbsp;|&)\s+/i, " and "))
@@ -162,23 +241,133 @@ def get_question(category_key = nil, value = nil)
   response
 end
 
-# Puts together the response to a request for categories:
-#
-def respond_with_categories
-	max_category = 18418
+## Category Retrieval
+# Fetches new categories to populate current_categories
+def fetch_categories(key)
+  current_categories = []
+  max_category = 18418
   uri = "http://jservice.io/api/categories?count=5&offset=#{1+rand(max_category/5)}"
   request = HTTParty.get(uri)
-
-  category_titles = []
   data = JSON.parse(request.body)
   data.each do |child|
-    category_titles << child['title']
-    key = "category:#{child['title']}"
-    $redis.set(key, child.to_json)
+    add_category(key, child, current_categories)
   end
-  response = "Wonderful. Let's take a look at the categories. They are: `"
-  response += category_titles.join("`, `") + "`."
+end
+
+# Returns existing categories or generates new ones
+def return_categories(key)
+  if $redis.exists(key)
+    categories = JSON.parse($redis.get(key))
+    categories
+  else
+    fetch_categories(key)
+    return_categories(key)
+  end
+end
+
+# Returns array of specific category data(useful for titles)
+def return_cat_data(categories, data)
+  category_data = []
+  categories.each do |category|
+    category_data.push(category["#{data}"])
+  end
+  category_data
+end
+
+# Responds with the current categories, if available. Otherwise, fetches a new
+# set of categories.
+def respond_with_categories(params)
+  channel_id = params[:channel_id]
+  key = "current_categories:#{channel_id}"
+  categories = return_categories(key)
+  response = stringify_remaining_questions(categories)
   response
+end
+
+def stringify_remaining_questions(categories)
+  response = "Wonderful. Let's take a look at the categories. They are: \n"
+  category_titles = return_cat_data(categories, 'title')
+  categories.each do |category|
+    response += "`" + category['title'] + "` for `" + category['values'].join("`, `") + "`.\n"
+  end
+  response
+end
+
+# Adds categories to current_categories. Category data consists of:
+# ID - The ID of the category, for ease of lookup later
+# Title - The title of the category, for player input
+# Values - 100-1000. These should be removed as questions on the board are
+# taken.
+def add_category(key = nil, base_category = nil, current_categories = nil)
+  if !base_category.nil?
+    category = {
+      'id' => base_category['id'],
+      'title' => base_category['title'],
+      'values' => value_set
+    }
+    current_categories.push(category)
+    $redis.set(key, current_categories.to_json)
+  else
+    puts "[add_to_category] No category specified"
+  end
+end
+
+def remove_category(key = nil, rcategory = nil)
+  response = ""
+  if !$redis.exists(key)
+    puts "[remove_category] No categories to remove!"
+    response = "There aren't any categories. Say `trebekbot let's play` to start a new round."
+  elsif rcategory.nil?
+    puts "[remove_category] No category specified"
+    response = "What's that?"
+  else
+    match = false
+    current_categories = JSON.parse($redis.get(key))
+    current_categories.each do |category|
+      if rcategory == category['title']
+        match = true
+        current_categories.delete(category)
+      end
+      if match == false
+        response = "I don't see that category on the board."
+      end
+    end
+    if current_categories.empty?
+      response = "And that's it for this session of Jeopardy, everyone."
+      response += respond_with_leaderboard({})
+      $redis.flushdb
+    else
+      $redis.set(key, current_categories.to_json)
+    end
+  end
+  response
+end
+
+def remove_val_from_category(key = nil, rcategory = nil, rval = nil)
+  to_delete = false
+  if !$redis.exists(key)
+    puts "[remove_val_from_category] No categories to remove!"
+  elsif rcategory.nil?
+    puts "[remove_val_from_category] No category specified"
+  elsif rval.nil?
+    puts "[remove_val_from_category] No value specified"
+  else
+    current_categories = JSON.parse($redis.get(key))
+    current_categories.each do |category|
+      if rcategory == category['title']
+        if category['values'].include?(rval)
+          category['values'].delete(rval)
+        end
+        if category['values'].empty?
+          to_delete = true
+        end
+      end
+    end
+    $redis.set(key, current_categories.to_json)
+    if to_delete == true
+      remove_category(key, rcategory)
+    end
+  end
 end
 
 # Processes an answer submitted by a user in response to a Jeopardy round:
@@ -466,7 +655,6 @@ def get_score_leaders(options = {})
   options = { :limit => 10, :order => "desc" }.merge(options)
   leaders = []
   $redis.scan_each(:match => "user_score:*"){ |key| user_id = key.gsub("user_score:", ""); leaders << { :user_id => user_id, :score => get_user_score(user_id) } }
-  puts "[LOG] Leaderboard: #{leaders}"
   if leaders.size > 1
     if options[:order] == "desc"
       leaders = leaders.uniq{ |l| l[:user_id] }.sort{ |a, b| b[:score] <=> a[:score] }.slice(0, options[:limit])
@@ -559,15 +747,10 @@ def trebek_wrong
 end
 
 def value_set
-  [  "100",
-     "200",
-     "300",
+  [  "200",
      "400",
-     "500",
      "600",
-     "700",
      "800",
-     "900",
      "1000"
   ]
 end
@@ -578,9 +761,9 @@ end
 def respond_with_help
   reply = <<help
 Type `#{ENV["BOT_USERNAME"]} jeopardy me` to start a new round of Slack Jeopardy. I will pick the category and price. Anyone in the channel can respond.
+Type `#{ENV["BOT_USERNAME"]} let's play` or `#{ENV["BOT_USERNAME"]} show the categories` to see a list of the remaining categories or create a new set of categories.
 Type `#{ENV["BOT_USERNAME"]} [what|where|who|when] [is|are] [answer]?` to respond to the active round. You have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. Remember, responses must be in the form of a question, e.g. `#{ENV["BOT_USERNAME"]} what is dirt?`.
-Type `#{ENV["BOT_USERNAME"]} show the categories` to see a list of 5 categories to choose.
-Type `#{ENV["BOT_USERNAME"]} I'll take [category]` start a new round with a specific category. If you do not, I will pick the price.
+Type `#{ENV["BOT_USERNAME"]} I'll take [category] for [value]` start a new round with one of the existing categories.
 Type `#{ENV["BOT_USERNAME"]} what is my score` to see your current score.
 Type `#{ENV["BOT_USERNAME"]} show the leaderboard` to see the top scores.
 Type `#{ENV["BOT_USERNAME"]} show the loserboard` to see the bottom scores.
