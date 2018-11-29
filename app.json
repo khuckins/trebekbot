@@ -50,6 +50,10 @@
         "[state outline]",
         "[flag]"
       ]
-    }
+  },
+  "ENABLE_FINAL_JEOPARDY": {
+      "description": "Boolean to determine whether or not Final Jeopardy! functionality should auto-start when the categories have been exhausted.",
+      "required": true,
+      "value": "true"
   }
 }

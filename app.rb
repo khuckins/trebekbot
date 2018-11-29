@@ -46,7 +46,6 @@ post "/" do
       response = "Sorry, can't play in this channel."
     elsif params[:text].match(/^jeopardy me/i)
       response = respond_with_question(params, nil, nil, true)
-      #response = respond_with_question(params)
     elsif params[:text].match(/my score$/i)
       response = respond_with_user_score(params[:user_id], params[:user_name])
     elsif params[:text].match(/^end game/i)
@@ -65,6 +64,8 @@ post "/" do
       response = respond_with_question(params, matches[1], matches[2])
     elsif params[:text].match(/^Throw (.*) at (.*)/i)
       response = "Do I look like zorkbot?"
+    elsif matches = params[:text].match(/^I wager (.*)/i)
+      response = respond_with_final_jeopardy_wager(params, matches[1])
     else
       response = process_answer(params)
     end
@@ -121,6 +122,92 @@ def respond_with_question(params, category = nil, value = nil, random_question =
     question = handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd)
   end
   question
+end
+
+# Once the categories are exhausted and all questions are answered, trebekbot
+# looks at all the players with scores higher than $1, asks them to wager.
+# Trebekbot will ask each individual a separate question only they can answer,
+# awarding them with the score wagered if correct
+def respond_with_final_jeopardy_intro(channel_id)
+  prev_question_key = "current_question:#{channel_id}"
+  unless $redis.exists("shush:question:#{channel_id}")
+
+    #Get finalists
+    finalists = parse_score_leaders()
+    final_category = fetch_categories(1)
+    $redis.set("final_category:#{channel_id}", final_category[0].to_json)
+    if finalists.size < 1
+      response = clear_leaderboard()
+    else
+      finalist_strings = []
+      finalists.each do |finalist|
+        finalist_strings.push("#{finalist[:user_name]}, with #{currency_format(finalist[:score].to_i)}")
+        $redis.del("finalist_answer:#{finalist[:user_id]}") if $redis.exists("finalist_answer:#{finalist[:user_id]}")
+        $redis.set("finalist:#{finalist[:user_id]}", finalist.to_json)
+        $redis.set("finalist_wager:#{finalist[:user_id]}", nil)
+      end
+      response = "Before we get into Final Jeopardy!, I want to take this opportunity to thank Slack for its hospitality, as well as our friends at #random.\n"
+      response += "Now, let's take a look at our finalists. We have " + finalist_strings.join("`; `") + ". \n"
+      response += "Remember, this could have the possibility of a big win happening for any of our finalists. \n"
+      response += "The final Jeopardy! category is `#{final_category[0]['title']}`. \n"
+      response += "Finalists, once everyone submits their wager using `trebekbot I wager [VALUE]`, I will provide the clue."
+    end
+    response
+  end
+end
+
+def respond_with_final_jeopardy_wager(params, wager)
+  channel_id = params[:channel_id]
+  user_id = params[:user_id]
+  user_nick = params[:user_name]
+
+  # Rule out some major problems immediately
+  return "We are not in Final Jeopardy!, #{user_nick}." if !$redis.exists("final_category:#{channel_id}")
+  return "You are not a finalist, #{user_nick}." if !$redis.exists("finalist:#{user_id}")
+  #return "You have already made your bet, #{user_nick}. You cannot change it." if $redis.exists("finalist_wager:#{user_id}")
+
+  player = $redis.get("finalist:#{user_id}")
+  player_score = get_user_score(user_id)
+  if validate_wager(wager, player_score) == false
+    return "Try again, #{user_nick}. You may wager between #{currency_format(1)} up to your current score, #{currency_format(player_score)}."
+  end
+  $redis.set("finalist_wager:#{user_id}", wager)
+  response = "You're wagering #{currency_format(wager.to_i)}, #{user_nick}."
+
+  if has_everyone_wagered() == true
+    response += respond_with_final_jeopardy_question(channel_id)
+  end
+  response
+end
+
+def respond_with_final_jeopardy_question(channel_id)
+  uri_key = "final_category:#{channel_id}"
+  final_category = JSON.parse($redis.get(uri_key))
+  uri = gather_uri(uri_key, final_category['title'])
+  final_question = fetch_question(uri)
+  set_current_question(channel_id, "current_question:#{channel_id}", final_question)
+
+  date = Date.parse(final_question["airdate"])
+  response = "Now that everyone has placed their wager, today's Final Jeopardy! question is, from `#{date.strftime("%Y")}`: `#{final_question["question"]}` \n"
+  response += "You have #{ENV["SECONDS_TO_ANSWER"]} seconds, players, good luck."
+
+  response
+end
+
+def validate_wager(wager, score)
+  return wager.to_i <= score.to_i && wager.to_i > 0
+end
+
+def has_everyone_wagered
+  b = true
+
+  finalists = parse_score_leaders()
+  finalists.each do |finalist|
+    if !$redis.exists("finalist_wager:#{finalist[:user_id]}")
+      b = false
+    end
+  end
+  b
 end
 
 def handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd = nil)
@@ -181,13 +268,20 @@ end
 
 # Creates the URI based on user request
 def gather_uri(key = nil, cat = nil, val = nil)
-  if !key.nil? && !cat.nil? && !val.nil?
-    category = return_categories(key).select {|c| c['title'] == cat}[0]
-    offset = rand(category['clues_count'])
-    return uri = "http://jservice.io/api/clues?category=#{category['id']}&value=#{val}&offset=#{offset}"
+  uri = "http://jservice.io/api/"
+  if !key.nil? && !cat.nil?
+    category = return_categories(key)
+    category = category.select {|c| c['title'] == cat} if category.kind_of?(Array)
+    #category = JSON.parse(category[0]) if category.kind_of?(Array)
+    offset = rand(category['clues_count'].to_i)
+    uri += "clues?category=#{category['id']}&offset=#{offset}"
+    if !val.nil?
+      uri += "&value=#{val}"
+    end
   else
-    return uri = "http://jservice.io/api/random?count=1"
+    uri += "random?count=1"
   end
+  uri
 end
 
 # Fetches question using URI
@@ -197,9 +291,9 @@ def fetch_question(uri)
   question = response["question"]
 
   if validate_question(question)
-    response = "Surprise Round! Instead of the question you took, we'll ask you this. "
+    response = "Surprise Round! Instead of the question you were expecting, we'll ask you this. \n"
     new_uri = gather_uri()
-    response += fetch_question(uri)
+    response += fetch_question(new_uri)
   end
   response = sanitize_question_response(response)
   response
@@ -222,15 +316,11 @@ end
 
 ## Category Retrieval
 # Fetches new categories to populate current_categories
-def fetch_categories(key)
-  current_categories = []
+def fetch_categories(count = nil)
   max_category = 18418
-  uri = "http://jservice.io/api/categories?count=5&offset=#{1+rand(max_category/5)}"
+  uri = "http://jservice.io/api/categories?count=#{count}&offset=#{1+rand(max_category/count.to_f)}"
   request = HTTParty.get(uri)
   data = JSON.parse(request.body)
-  data.each do |child|
-    add_category(key, child, current_categories)
-  end
 end
 
 # Returns existing categories or generates new ones
@@ -239,7 +329,11 @@ def return_categories(key)
     categories = JSON.parse($redis.get(key))
     categories
   else
-    fetch_categories(key)
+    data = fetch_categories(5)
+    current_categories = []
+    data.each do |child|
+      add_category(key, child, current_categories)
+    end
     return_categories(key)
   end
 end
@@ -361,6 +455,7 @@ end
 #
 def process_answer(params)
   channel_id = params[:channel_id]
+  return process_final(params) if $redis.exists("final_category:#{channel_id}")
   user_id = params[:user_id]
   user_nick = params["user_name"]
   key = "current_question:#{channel_id}"
@@ -397,6 +492,84 @@ def process_answer(params)
     end
   end
   reply
+end
+
+def process_final(params)
+  channel_id = params[:channel_id]
+  user_id = params[:user_id]
+  user_nick = params[:user_name]
+  key = "current_question:#{channel_id}"
+  current_question = $redis.get(key)
+  return "You are not a finalist, #{user_nick}." if !$redis.exists("finalist:#{user_id}")
+
+  current_question = JSON.parse(current_question)
+  current_question['value'] = $redis.get("finalist_wager:#{user_id}").to_i
+  current_answer = current_question['answer']
+  user_answer = params[:text]
+  answered_key = "finalist_answer:#{user_id}"
+  if $redis.exists(answered_key)
+    reply = "You had your chance, #{user_nick}. Let someone else answer."
+  elsif params["timestamp"].to_f > current_question["expiration"]
+    $redis.set(answered_key, user_answer)
+    reply = "Time's up, #{user_nick}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. \n"
+    $redis.set("finalist_final_score:#{user_id}", current_question['value'].to_i * -1)
+    reply += finish_final_jeopardy(channel_id, current_question)
+  elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
+    $redis.set(answered_key, user_answer)
+    $redis.set("finalist_final_score:#{user_id}", current_question['value'])
+    #score = update_score(user_id, current_question["value"])
+    reply = finish_final_jeopardy(channel_id, current_question) if has_everyone_answered_final() == true
+  else
+    $redis.set(answered_key, user_answer)
+    $redis.set("finalist_final_score:#{user_id}", current_question['value'].to_i * -1)
+    #score = update_score(user_id, (current_question["value"] * -1))
+    reply = finish_final_jeopardy(channel_id, current_question) if has_everyone_answered_final() == true
+  end
+  reply
+end
+
+def has_everyone_answered_final
+  b = true
+
+  finalists = parse_score_leaders()
+  finalists.each do |finalist|
+    if !$redis.exists("finalist_answer:#{finalist[:user_id]}")
+      b = false
+    end
+  end
+  b
+end
+
+def finish_final_jeopardy(channel_id, current_question)
+  response = "The answer for tonight's Final Jeopardy! question is \n"
+  response += "`#{current_question['answer']}`. \n"
+
+  finalists = parse_score_leaders()
+  finalists.each do |finalist|
+    if $redis.exists("finalist_final_score:#{finalist[:user_id]}")
+      final_score = $redis.get("finalist_final_score:#{finalist[:user_id]}").to_i
+      score = update_score(finalist[:user_id], final_score)
+    elsif $redis.exists("finalist_wager:#{finalist[:user_id]}")
+      final_score = $redis.get("finalist_wager:#{finalist[:user_id]}").to_i * -1
+      score = update_score(finalist[:user_id], final_score)
+    else
+      score = update_score(finalist[:user_id], finalist[:score].to_i * -1)
+    end
+  end
+  winners = []
+  parse_score_leaders.each_with_index do |winner, i|
+    user_id = winner[:user_id]
+    name = get_slack_name(winner[:user_id])
+    score = currency_format(get_user_score(user_id))
+    winners << "#{i + 1}. #{name}: #{score}"
+  end
+  if winners.size > 0
+    response += "And now, announcing the winners of tonight's game: \n\n#{winners.join("\n")}"
+  else
+    response += "Unfortunately, we don't always come out with a winner in Jeopardy!. This is one of those times."
+  end
+  clear_leaderboard
+  response
 end
 
 # Formats a number as currency.
@@ -633,7 +806,7 @@ end
 def get_score_leaders(options = {})
   options = { :limit => 10, :order => "desc" }.merge(options)
   leaders = []
-  $redis.scan_each(:match => "user_score:*"){ |key| user_id = key.gsub("user_score:", ""); leaders << { :user_id => user_id, :score => get_user_score(user_id) } }
+  $redis.scan_each(:match => "user_score:*"){ |key| user_id = key.gsub("user_score:", ""); leaders << { :user_id => user_id, :score => get_user_score(user_id)} }
   if leaders.size > 1
     if options[:order] == "desc"
       leaders = leaders.uniq{ |l| l[:user_id] }.sort{ |a, b| b[:score] <=> a[:score] }.slice(0, options[:limit])
@@ -643,6 +816,22 @@ def get_score_leaders(options = {})
   else
     leaders
   end
+end
+
+# Parse score leaders with only positive scores
+def parse_score_leaders()
+  users = []
+  $redis.scan_each(:match => "user_score:*"){ |key| user_id = key.gsub("user_score:", ""); users << { :user_id => user_id, :score => get_user_score(user_id), :user_name => get_slack_name(user_id) } }
+  finalists = []
+  if users.size > 0
+    users.each do |user|
+      if user[:score] >= 1
+        finalists.push(user)
+      end
+    end
+    finalists = finalists.uniq{ |f| f[:user_id] }.sort{ |a, b| b[:score] <=> a[:score] }.slice(0, 100)
+  end
+  finalists
 end
 
 # Funny quotes from SNL's Celebrity Jeopardy, to speak
@@ -692,7 +881,6 @@ def trebek_wrong
      "Nope.  It will be goodbye for you today.",
      "One of the main differences between regular shows and kids week is emotion.  As talented as you are, you havn't had very much experience with not winning.",
      "Ah, if only you had been able to accumulate more money.",
-     "Such a modest champion.  You just won $6400 yesterday.  Could have been a big, big payday.  But you didn't get the final Jeopardy category.  Cost 2/3s of your money.",
      "You were having difficulties with that signaling device.  I saw.  You won't be around for Final Jeopardy!",
      "It's a shame you weren't faster on the signaling button in earlier rounds.",
      "It's been happening a lot lately.  Two of the players get off to a good start, and you start off badly.",
