@@ -45,7 +45,7 @@ post "/" do
     elsif is_channel_blacklisted?(params[:channel_name])
       response = "Sorry, can't play in this channel."
     elsif params[:text].match(/^jeopardy me/i)
-      response = respond_with_random_question(params)
+      response = respond_with_question(params, nil, nil, true)
       #response = respond_with_question(params)
     elsif params[:text].match(/my score$/i)
       response = respond_with_user_score(params[:user_id], params[:user_name])
@@ -97,68 +97,54 @@ end
 # speaks the category, value, and the new question, and shushes the bot for 5 seconds
 # (this is so two or more users can't do `jeopardy me` within 5 seconds of each other.)
 #
-def respond_with_random_question(params, category = nil, value = nil)
+def respond_with_question(params, category = nil, value = nil, rand = nil)
   channel_id = params[:channel_id]
+  key = "current_question:#{channel_id}"
+  catkey = "current_categories:#{channel_id}" # We'll need to match the categories
   question = ""
   unless $redis.exists("shush:question:#{channel_id}")
-    if !value_set.include?(value)
-      value = value_set.sample
+    if rand.nil?
+      if value.nil?
+        return "Typically, you would want to select a question on the board, not just a category."
+      elsif category.nil?
+        return "And what question in what category would you like me to ask?"
+      else
+        cat_response = compare_category(catkey, category)
+        return "That category isn't on the board." if cat_response == false
+        val_response = compare_value(catkey, category, value)
+        return "That question is no longer on the board." if val_response == false
+      end
     end
-    response = get_random_question(category, value)
-    question = response["question"]
 
-    key = "current_question:#{channel_id}"
-    previous_question = $redis.get(key)
-    if !previous_question.nil?
-      previous_question = JSON.parse(previous_question)["answer"]
-      question = "The answer is `#{previous_question}`.\n"
-    end
-    date = Date.parse(response["airdate"])
-    question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}, from `#{date.strftime("%Y")}`: `#{response["question"]}`"
-    $redis.pipelined do
-      $redis.set(key, response.to_json)
-      $redis.setex("shush:question:#{channel_id}", 10, "true")
-      $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
-    end
+    question = handle_question_retrieval(channel_id, key, catkey, category, value)
   end
   question
 end
 
-def respond_with_question(params, category = nil, value = nil)
-  channel_id = params[:channel_id]
-  catkey = "current_categories:#{channel_id}" # We'll need to match the categories
-  question = ""
-  unless $redis.exists("shush:question:#{channel_id}")
-    if value.nil?
-      question = "Typically, you would want to select a question on the board, not just a category."
-    elsif category.nil?
-      question = "And what question in what category would you like me to ask?"
-    else
-      cat_response = compare_category(catkey, category)
-      return "That category isn't on the board." if cat_response == false
-      val_response = compare_value(catkey, category, value)
-      return "That question is no longer on the board." if val_response == false
-      response = fetch_question(catkey, category, value)
-      question = response["question"]
-
-      remove_val_from_category(catkey, category, value)
-
-      key = "current_question:#{channel_id}"
-      previous_question = $redis.get(key)
-      if !previous_question.nil?
-        previous_question = JSON.parse(previous_question)["answer"]
-        question = "The answer is `#{previous_question}`.\n"
-      end
-      date = Date.parse(response["airdate"])
-      question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}, from `#{date.strftime("%Y")}`: `#{response["question"]}`"
-      $redis.pipelined do
-        $redis.set(key, response.to_json)
-        $redis.setex("shush:question:#{channel_id}", 10, "true")
-        $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
-      end
-    end
+def handle_question_retrieval(channel_id, key, catkey, category, value)
+  uri = gather_uri(catkey, category, value)
+  response = fetch_question(uri)
+  question = response["question"]
+  unless !rand.nil?
+    remove_val_from_category(catkey, category, value)
   end
+  previous_question = $redis.get(key)
+  if !previous_question.nil?
+    previous_question = JSON.parse(previous_question)["answer"]
+    question = "The answer is `#{previous_question}`.\n"
+  end
+  date = Date.parse(response["airdate"])
+  question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}, from `#{date.strftime("%Y")}`: `#{response["question"]}`"
+  set_current_question(channel_id, key, response)
   question
+end
+
+def set_current_question(channel_id, key, response)
+  $redis.pipelined do
+    $redis.set(key, response.to_json)
+    $redis.setex("shush:question:#{channel_id}", 10, "true")
+    $redis.set("category:#{response['category']['title']}", "#{response['category'].to_json}")
+  end
 end
 
 def compare_category(key, category)
@@ -186,55 +172,41 @@ def compare_value(key, cat, val)
   match
 end
 
-def fetch_question(key = nil, cat = nil, value = nil)
-  if !key.nil?
+# Creates the URI based on user request
+def gather_uri(key = nil, cat = nil, val = nil)
+  if !key.nil? && !cat.nil? && !val.nil?
     category = return_categories(key).select {|c| c['title'] == cat}[0]
     offset = rand(category['clues_count'])
-    uri = "http://jservice.io/api/clues?category=#{category['id']}&value=#{value}&offset=#{offset}"
+    return uri = "http://jservice.io/api/clues?category=#{category['id']}&value=#{val}&offset=#{offset}"
+  else
+    return uri = "http://jservice.io/api/random?count=1"
   end
+end
+
+# Fetches question using URI
+def fetch_question(uri)
   request = HTTParty.get(uri)
   response = JSON.parse(request.body).first
   question = response["question"]
 
-  if question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
+  if validate_question(question)
     response = "Surprise Round! Instead of the question you took, we'll ask you this. "
-    response += get_random_question(category, value)
+    new_uri = gather_uri()
+    response += fetch_question(uri)
   end
-  response["value"] = 200 if response["value"].nil?
-  response["answer"] = Sanitize.fragment(response["answer"].gsub(/\s+(&nbsp;|&)\s+/i, " and "))
-  response["expiration"] = params["timestamp"].to_f + ENV["SECONDS_TO_ANSWER"].to_f
+  response = sanitize_question_response(response)
   response
 end
 
+# Ensures question exists and doesn't contain blacklisted substrings
+def validate_question(question)
+  return question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
+end
 
-# Gets a random answer from the jService API, and does some cleanup on it:
-# If the question is not present, requests another one
 # If the answer doesn't have a value, sets a default of $200
 # If there's HTML in the answer, sanitizes it (otherwise it won't match the user answer)
 # Adds an "expiration" value, which is the timestamp of the Slack request + the seconds to answer config var
-#
-# Gets a random answer from the jService API, and does some cleanup on it:
-# If the question is not present, requests another one
-# If the answer doesn't have a value, sets a default of $200
-# If there's HTML in the answer, sanitizes it (otherwise it won't match the user answer)
-# Adds an "expiration" value, which is the timestamp of the Slack request + the seconds to answer config var
-#
-def get_random_question(category_key = nil, value = nil)
-	if !category_key.nil?
-    data = $redis.get("category:#{category_key}")
-    category = JSON.parse(data)
-  	offset = rand(category['clues_count'])
-    uri = "http://jservice.io/api/clues?category=#{category['id']}&offset=#{offset}"
-  else
-    uri = "http://jservice.io/api/random?count=1"
-  end
-  request = HTTParty.get(uri)
-  response = JSON.parse(request.body).first
-  question = response["question"]
-
-  if question.nil? || question.strip == "" || (!ENV["QUESTION_SUBSTRING_BLACKLIST"].nil? && ENV["QUESTION_SUBSTRING_BLACKLIST"].split(',').any? { |phrase| question.include?(phrase) })
-    response = get_random_question(category, value)
-  end
+def sanitize_question_response(response)
   response["value"] = 200 if response["value"].nil?
   response["answer"] = Sanitize.fragment(response["answer"].gsub(/\s+(&nbsp;|&)\s+/i, " and "))
   response["expiration"] = params["timestamp"].to_f + ENV["SECONDS_TO_ANSWER"].to_f
