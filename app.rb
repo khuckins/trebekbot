@@ -97,7 +97,7 @@ end
 # speaks the category, value, and the new question, and shushes the bot for 5 seconds
 # (this is so two or more users can't do `jeopardy me` within 5 seconds of each other.)
 #
-def respond_with_question(params, category = nil, value = nil, rand = nil)
+def respond_with_question(params, category = nil, value = nil, random_question = nil)
   channel_id = params[:channel_id]
   key = "current_question:#{channel_id}"
   catkey = "current_categories:#{channel_id}" # We'll need to match the categories
@@ -115,23 +115,30 @@ def respond_with_question(params, category = nil, value = nil, rand = nil)
         return "That question is no longer on the board." if val_response == false
       end
     end
-
-    question = handle_question_retrieval(channel_id, key, catkey, category, value)
+    unless $redis.exists("triggered_dd:#{channel_id}")
+      rand > ENV["DD_CHANCE"].to_i ? dd = false : dd = true
+    end
+    question = handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd)
   end
   question
 end
 
-def handle_question_retrieval(channel_id, key, catkey, category, value)
+def handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd = nil)
   uri = gather_uri(catkey, category, value)
   response = fetch_question(uri)
   question = response["question"]
-  unless !rand.nil?
+  unless !random_question.nil?
     remove_val_from_category(catkey, category, value)
   end
   previous_question = $redis.get(key)
   if !previous_question.nil?
     previous_question = JSON.parse(previous_question)["answer"]
     question = "The answer is `#{previous_question}`.\n"
+  end
+  if dd
+    question += "Daily Double!\n"
+    $redis.set("triggered_dd:#{channel_id}", true)
+    response["value"] = response["value"] * 2
   end
   date = Date.parse(response["airdate"])
   question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}, from `#{date.strftime("%Y")}`: `#{response["question"]}`"
