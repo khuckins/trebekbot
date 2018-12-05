@@ -94,7 +94,6 @@ def send_reply_to_slack(channel_id, text)
   payload["text"] = text
   payload["username"] = ENV["BOT_USERNAME"] unless ENV["BOT_USERNAME"].nil?
   payload["icon_emoji"] = ENV["BOT_ICON"] unless ENV["BOT_ICON"].nil?
-  puts "[LOG] Sending message to slack #{payload.to_json}"
   if !ENV["SLACK_INCOMING_URI"].nil?
     RestClient.post ENV["SLACK_INCOMING_URI"], payload.to_json, :content_type => :json, :accept => :json
   end
@@ -229,7 +228,7 @@ def handle_question_retrieval(channel_id, key, catkey, category, value, random_q
   response = fetch_question(uri)
   question = response["question"]
   unless !random_question.nil?
-    remove_val_from_category(catkey, category, value)
+    remove_val_from_category(catkey, category, value, channel_id)
   end
   previous_question = $redis.get(key)
   if !previous_question.nil?
@@ -286,10 +285,8 @@ def gather_uri(key = nil, cat = nil, val = nil)
   uri = "http://jservice.io/api/"
   if !key.nil? && !cat.nil?
     category = return_categories(key)
-    category = category.select {|c| c['title'] == cat} if category.kind_of?(Array)
-    #category = JSON.parse(category[0]) if category.kind_of?(Array)
-    offset = rand(category['clues_count'].to_i)
-    uri += "clues?category=#{category['id']}&offset=#{offset}"
+    category = category.select {|c| c["title"] == cat}[0] if category.kind_of? Array
+    uri += "clues?category=#{category['id']}"
     if !val.nil?
       uri += "&value=#{val}"
     end
@@ -304,7 +301,6 @@ def fetch_question(uri)
   request = HTTParty.get(uri)
   response = JSON.parse(request.body).first
   question = response["question"]
-
   if validate_question(question)
     response = "Surprise Round! Instead of the question you were expecting, we'll ask you this. \n"
     new_uri = gather_uri()
@@ -343,16 +339,22 @@ def start_timer(channel_id, response)
 end
 
 def end_round(channel_id, response)
-  puts "[LOG] ending round for #{channel_id} and #{response["id"]}"
   # make sure the current question is the same one we were waiting for
   key = "current_question:#{channel_id}"
   current_question = $redis.get(key)
   current_question = JSON.parse(current_question)
   if response["id"] == current_question["id"]
     reply = "Time's up! The correct answer is `#{current_question["answer"]}`."
-    puts "[LOG] sending reply: #{reply}"
     send_reply_to_slack(channel_id, reply)
     mark_question_as_answered(channel_id)
+    check_final_jeopardy_valid(channel_id)
+  end
+end
+
+def check_final_jeopardy_valid(channel_id)
+  if $redis.exists("begin_final_jeopardy:#{channel_id}")
+    res = respond_with_final_jeopardy_intro(channel_id)
+    send_reply_to_slack(channel_id, res)
   end
 end
 
@@ -405,11 +407,13 @@ end
 # Values - 100-1000. These should be removed as questions on the board are
 # taken.
 def add_category(key = nil, base_category = nil, current_categories = nil)
+  base_category['title'] = sanitize_titles(base_category['title'])
   if !base_category.nil?
     category = {
       'id' => base_category['id'],
       'title' => base_category['title'],
-      'values' => value_set
+      'values' => value_set,
+      'clues_count' => base_category['clues_count'].to_s
     }
     current_categories.push(category)
     $redis.set(key, current_categories.to_json)
@@ -418,7 +422,12 @@ def add_category(key = nil, base_category = nil, current_categories = nil)
   end
 end
 
-def remove_category(key = nil, rcategory = nil)
+def sanitize_titles(title)
+  sanitized_title = title.gsub /&amp;/, "and"
+  sanitized_title
+end
+
+def remove_category(key = nil, rcategory = nil, channel_id)
   response = ""
   if !$redis.exists(key)
     puts "[remove_category] No categories to remove!"
@@ -439,9 +448,13 @@ def remove_category(key = nil, rcategory = nil)
       end
     end
     if current_categories.empty?
-      response = "And that's it for this session of Jeopardy, everyone."
-      response += respond_with_leaderboard({})
-      $redis.flushdb
+      response = "And that's it for this round of Jeopardy, everyone. \n"
+      if ENV["ENABLE_FINAL_JEOPARDY"] == "true"
+        $redis.set("begin_final_jeopardy:#{channel_id}", true)
+      else
+        response += respond_with_leaderboard()
+        $redis.flushdb
+      end
     else
       $redis.set(key, current_categories.to_json)
     end
@@ -449,7 +462,7 @@ def remove_category(key = nil, rcategory = nil)
   response
 end
 
-def remove_val_from_category(key = nil, rcategory = nil, rval = nil)
+def remove_val_from_category(key = nil, rcategory = nil, rval = nil, channel_id)
   to_delete = false
   if !$redis.exists(key)
     puts "[remove_val_from_category] No categories to remove!"
@@ -471,7 +484,7 @@ def remove_val_from_category(key = nil, rcategory = nil, rval = nil)
     end
     $redis.set(key, current_categories.to_json)
     if to_delete == true
-      remove_category(key, rcategory)
+      remove_category(key, rcategory, channel_id)
     end
   end
 end
@@ -509,15 +522,17 @@ def process_answer(params)
       else
         reply = "Time's up, #{user_nick}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
       end
-      mark_question_as_answered(params[:channel_id])
+      mark_question_as_answered(channel_id)
     elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
       score = update_score(user_id, current_question["value"])
       reply = "That is correct, #{user_nick}. Your total score is #{currency_format(score)}."
-      mark_question_as_answered(params[:channel_id])
+      check_final_jeopardy_valid(channel_id)
+      mark_question_as_answered(channel_id)
     elsif is_correct_answer?(current_answer, user_answer)
       score = update_score(user_id, (current_question["value"] * -1))
       reply = "That is correct, #{user_nick}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
       $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
+      check_final_jeopardy_valid(channel_id)
     else
       score = update_score(user_id, (current_question["value"] * -1))
       reply = "@#{user_nick}:  " + trebek_wrong + "  " + trebek_wrong_score + " #{currency_format(score)}."
