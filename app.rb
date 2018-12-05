@@ -316,7 +316,7 @@ end
 
 ## Category Retrieval
 # Fetches new categories to populate current_categories
-def fetch_categories(count = nil)
+def fetch_categories(count = ENV['DEFAULT_CATEGORY_COUNT'].to_i)
   max_category = 18418
   uri = "http://jservice.io/api/categories?count=#{count}&offset=#{1+rand(max_category/count.to_f)}"
   request = HTTParty.get(uri)
@@ -329,7 +329,7 @@ def return_categories(key)
     categories = JSON.parse($redis.get(key))
     categories
   else
-    data = fetch_categories(5)
+    data = fetch_categories()
     current_categories = []
     data.each do |child|
       add_category(key, child, current_categories)
