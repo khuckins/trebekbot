@@ -53,9 +53,9 @@ post "/" do
     elsif params[:text].match(/^help$/i)
       response = respond_with_help
     elsif params[:text].match(/^show (me\s+)?(the\s+)?leaderboard$/i)
-      response = respond_with_leaderboard(params)
+      response = respond_with_leaderboard()
     elsif params[:text].match(/^show (me\s+)?(the\s+)?loserboard$/i)
-      response = respond_with_loserboard(params)
+      response = respond_with_leaderboard("loserboard:1", "asc", "bottom")
     elsif params[:text].match(/^show (me\s+)?(the\s+)?categories$/i)
       response = respond_with_categories(params)
     elsif params[:text].match(/^let's play$/i)
@@ -756,43 +756,18 @@ end
 # Speaks the top scores across Slack.
 # The response is cached for 5 minutes.
 #
-def respond_with_leaderboard(params)
-  key = "leaderboard:1"
+def respond_with_leaderboard(key = "leaderboard:1", order = "desc", response = "top")
   response = $redis.get(key)
   if response.nil?
     leaders = []
-    get_score_leaders.each_with_index do |leader, i|
+    get_score_leaders({:order => order}).each_with_index do |leader, i|
       user_id = leader[:user_id]
       name = get_slack_name(leader[:user_id])
       score = currency_format(get_user_score(user_id))
       leaders << "#{i + 1}. #{name}: #{score}"
     end
     if leaders.size > 0
-      response = "Let's take a look at the top scores:\n\n#{leaders.join("\n")}"
-    else
-      response = "There are no scores yet!"
-    end
-    $redis.setex(key, 60*5, response)
-  end
-  response
-end
-
-# Speaks the bottom scores across Slack.
-# The response is cached for 5 minutes.
-#
-def respond_with_loserboard(params)
-  key = "loserboard:1"
-  response = $redis.get(key)
-  if response.nil?
-    leaders = []
-    get_score_leaders({ :order => "asc" }).each_with_index do |leader, i|
-      user_id = leader[:user_id]
-      name = get_slack_name(leader[:user_id])
-      score = currency_format(get_user_score(user_id))
-      leaders << "#{i + 1}. #{name}: #{score}"
-    end
-    if leaders.size > 0
-      response = "Let's take a look at the bottom scores:\n\n#{leaders.join("\n")}"
+      response = "Let's take a look at the #{response} scores:\n\n#{leaders.join("\n")}"
     else
       response = "There are no scores yet!"
     end
