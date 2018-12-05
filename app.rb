@@ -134,7 +134,6 @@ def respond_with_question(params, category = nil, value = nil, random_question =
       rand > ENV["DD_CHANCE"].to_i ? dd = false : dd = true
     end
     question = handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd)
-    start_timer(channel_id, response)
   end
   question
 end
@@ -245,6 +244,7 @@ def handle_question_retrieval(channel_id, key, catkey, category, value, random_q
   date = Date.parse(response["airdate"])
   question += "The category is `#{response["category"]["title"]}` for #{currency_format(response["value"])}, from `#{date.strftime("%Y")}`: `#{response["question"]}`"
   set_current_question(channel_id, key, response)
+  start_timer(channel_id, response)
   question
 end
 
