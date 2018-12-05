@@ -22,15 +22,14 @@ If you'd rather do it manually, then just clone this repo, set up a Heroku app w
 
 ## Usage
 
-* `trebekbot jeopardy me`: starts a round of Jeopardy! trebekbot will pick a category and score for you.
+* `trebekbot jeopardy me`: gives a randomized question from Jeopardy! trebekbot will pick a category and score for you.
+* `trebekbot show (me the) categories` or `trebekbot let's play`: displays the current categories in play, or, if no categories are in play, trebekbot will pick five categories, starting a round of Jeopardy!
+* `trebekbot I'll take [category] for [value]`: gives a question with the supplied category and value as long as the category/value combination is in play.
 * `trebekbot what/who is/are [answer]`: sends an answer. Remember, responses must be in the form of a question!
 * `trebekbot what's my score`: shows your current score.
 * `trebekbot show the leaderboard`: shows the current top scores.
-<<<<<<< HEAD
-* `trebekbot end game`: clears all player scores.
-=======
+* `trebekbot end game`: clears all player scores and ends the current round of Jeopardy!
 * `trebekbot show the loserboard`: shows the current bottom scores.
->>>>>>> upstream/master
 * `trebekbot help`: shows this help information.
 
 ## Credits & acknowledgements
@@ -47,7 +46,7 @@ Big thanks to [Steve Ottenad](https://github.com/sottenad) for building [jServic
 
 Feel free to open a new issue if you have questions, concerns, bugs, or feature requests. Just remember that I'm doing this for fun, for free, in my free time, and I may not be able to help you, respond in a timely manner, or implement any feature requests.
 
-## License 
+## License
 
 Copyright (c) 2014, Guillermo Esteves
 All rights reserved.
