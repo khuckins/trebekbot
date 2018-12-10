@@ -32,6 +32,16 @@ If you'd rather do it manually, then just clone this repo, set up a Heroku app w
 * `trebekbot show the loserboard`: shows the current bottom scores.
 * `trebekbot help`: shows this help information.
 
+## Options
+
+Trebekbot contains several options so users can customize their Jeopardy experience.
+
+* `DD_CHANCE`: Chance of a Daily Double occurring when requesting a question. Daily doubles have twice the score that they normally would have. Default value: `0.2`
+* `ENABLE_FINAL_JEOPARDY`: Toggle Final Jeopardy! functionality, causing Final Jeopardy! to begin when the board is cleared of questions. Default value: `true`
+* `ENABLE_RANDOM_QUESTIONS`: Toggle the functionality of `trebekbot jeopardy me` between showing a list of the current categories(or generating new ones) or retrieving a random question. Default value: `true`
+* `QUESTION_SUBSTRING_BLACKLIST`: An array of strings that will be detected when retrieving a question. If detected, the question will be thrown out and replaced with a random question, instead.
+* `SECONDS_TO_ANSWER`: How many seconds you have to answer before Trebekbot gives the answer. Default value: `30`
+
 ## Credits & acknowledgements
 
 Big thanks to [Steve Ottenad](https://github.com/sottenad) for building [jService](http://jservice.io/), the service that powers this bot.
