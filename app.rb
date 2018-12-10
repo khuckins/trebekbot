@@ -137,6 +137,14 @@ def respond_with_question(params, category = nil, value = nil, random_question =
   question
 end
 
+def validate_random_question(params)
+  if ENV["ENABLE_RANDOM_QUESTIONS"] == true
+    response = respond_with_question(params, nil, nil, true)
+  else
+      response = respond_with_categories(params)
+  end
+end
+
 # Once the categories are exhausted and all questions are answered, trebekbot
 # looks at all the players with scores higher than $1, asks them to wager.
 # Trebekbot will ask each individual a separate question only they can answer,
