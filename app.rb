@@ -79,6 +79,10 @@ post "/" do
   body json_response_for_slack(response)
 end
 
+def logger(method, str)
+  puts "[#{method}] #{str}"
+end
+
 # Puts together the json payload that needs to be sent back to Slack
 #
 def json_response_for_slack(reply)
@@ -426,7 +430,7 @@ def add_category(key = nil, base_category = nil, current_categories = nil)
     current_categories.push(category)
     $redis.set(key, current_categories.to_json)
   else
-    puts "[add_to_category] No category specified"
+    logger(__method__, "No category specified")
   end
 end
 
@@ -438,10 +442,10 @@ end
 def remove_category(key = nil, rcategory = nil, channel_id)
   response = ""
   if !$redis.exists(key)
-    puts "[remove_category] No categories to remove!"
+    logger(__method__, "No categories to remove!")
     response = "There aren't any categories. Say `trebekbot let's play` to start a new round."
   elsif rcategory.nil?
-    puts "[remove_category] No category specified"
+    logger(__method__, "No category specified")
     response = "What's that?"
   else
     match = false
@@ -473,11 +477,11 @@ end
 def remove_val_from_category(key = nil, rcategory = nil, rval = nil, channel_id)
   to_delete = false
   if !$redis.exists(key)
-    puts "[remove_val_from_category] No categories to remove!"
+    logger(__method__, "No categories to remove!")
   elsif rcategory.nil?
-    puts "[remove_val_from_category] No category specified"
+    logger(__method__, "No category specified")
   elsif rval.nil?
-    puts "[remove_val_from_category] No value specified"
+    logger(__method__, "No value specified")
   else
     current_categories = JSON.parse($redis.get(key))
     current_categories.each do |category|
