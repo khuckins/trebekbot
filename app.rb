@@ -68,6 +68,12 @@ post "/" do
       response = "Do I look like zorkbot?"
     elsif matches = params[:text].match(/^I wager (.*)/i)
       response = respond_with_final_jeopardy_wager(params, matches[1])
+    elsif matches = params[:text].match(/^debug remove (.*)/i)
+      response = remove_category("current_categories:#{params[:channel_id]}", matches[1], params[:channel_id])
+    elsif params[:text].match(/^debug score/i)
+      response = update_score(params[:user_id], "1337")
+    elsif params[:text].match(/^debug final jeopardy/i)
+      response = respond_with_final_jeopardy_intro(params[:channel_id])
     else
       response = process_answer(params)
     end
