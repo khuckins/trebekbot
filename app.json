@@ -56,6 +56,11 @@
       "required": true,
       "value": "true"
   },
+  "ENABLE_RANDOM_QUESTIONS": {
+      "description": "Boolean to determine whether or not 'trebekbot jeopardy me' should retrieve random questions.",
+      "required": true,
+      "value": "true"
+  },
   "DEFAULT_CATEGORY_COUNT": {
     "description": "Number of categories that a single round should consist of.",
     "requires": true,
