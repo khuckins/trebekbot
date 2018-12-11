@@ -238,7 +238,7 @@ end
 def handle_question_retrieval(channel_id, key, catkey, category, value, random_question, dd = nil)
   uri = gather_uri(catkey, category, value)
   response = fetch_question(uri)
-  question = response["question"]
+  question = ""
   unless !random_question.nil?
     remove_val_from_category(catkey, category, value, channel_id)
   end
