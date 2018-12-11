@@ -527,27 +527,27 @@ def process_answer(params)
     user_answer = params[:text]
     answered_key = "user_answer:#{channel_id}:#{current_question["id"]}:#{user_id}"
     if $redis.exists(answered_key)
-      reply = "You had your chance, #{user_nick}. Let someone else answer."
+      reply = "@#{user_nick}, you had your chance. Let someone else answer."
     elsif params["timestamp"].to_f > current_question["expiration"]
       if is_correct_answer?(current_answer, user_answer)
-        reply = "That is correct, #{user_nick}, but time's up! Remember, you only have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
+        reply = "@#{user_nick}: That is correct, but time's up! Remember, you only have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer."
       else
-        reply = "Time's up, #{user_nick}! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
+        reply = "@#{user_nick}: Time's up! Remember, you have #{ENV["SECONDS_TO_ANSWER"]} seconds to answer. The correct answer is `#{current_question["answer"]}`."
       end
       mark_question_as_answered(channel_id)
     elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
       score = update_score(user_id, current_question["value"])
-      reply = "That is correct, #{user_nick}. #{trebek_right_score} #{currency_format(score)}."
+      reply = "@#{user_nick}: That is correct. #{trebek_right_score} #{currency_format(score)}."
       check_final_jeopardy_valid(channel_id)
       mark_question_as_answered(channel_id)
     elsif is_correct_answer?(current_answer, user_answer)
       score = update_score(user_id, (current_question["value"] * -1))
-      reply = "That is correct, #{user_nick}, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
+      reply = "@#{user_nick}: That is correct, but responses have to be in the form of a question. Your total score is #{currency_format(score)}."
       $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
       check_final_jeopardy_valid(channel_id)
     else
       score = update_score(user_id, (current_question["value"] * -1))
-      reply = "@#{user_nick}:  " + trebek_wrong + "  " + trebek_wrong_score + " #{currency_format(score)}."
+      reply = "@#{user_nick}: #{trebek_wrong} #{trebek_wrong_score} #{currency_format(score)}."
       $redis.setex(answered_key, ENV["SECONDS_TO_ANSWER"], "true")
     end
   end
