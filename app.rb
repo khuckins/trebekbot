@@ -537,7 +537,7 @@ def process_answer(params)
       mark_question_as_answered(channel_id)
     elsif is_question_format?(user_answer) && is_correct_answer?(current_answer, user_answer)
       score = update_score(user_id, current_question["value"])
-      reply = "That is correct, #{user_nick}. Your total score is #{currency_format(score)}."
+      reply = "That is correct, #{user_nick}. #{trebek_right_score} #{currency_format(score)}."
       check_final_jeopardy_valid(channel_id)
       mark_question_as_answered(channel_id)
     elsif is_correct_answer?(current_answer, user_answer)
@@ -883,79 +883,23 @@ def parse_score_leaders()
   finalists
 end
 
-# Funny quotes from SNL's Celebrity Jeopardy, to speak
-# when someone invokes trebekbot and there's no active round.
-#
 def trebek_me
-  [ "Welcome back to Slack Jeopardy. Before we begin this Jeopardy round, I'd like to ask our contestants once again to please refrain from using ethnic slurs.",
-    "Okay, Turd Ferguson.",
-    "I hate my job.",
-    "Let's just get this over with.",
-    "Do you have an answer?",
-    "I don't believe this. Where did you get that magic marker? We frisked you on the way in here.",
-    "What a ride it has been, but boy, oh boy, these Slack users did not know the right answers to any of the questions.",
-    "Back off. I don't have to take that from you.",
-    "That is _awful_.",
-    "Okay, for the sake of tradition, let's take a look at the answers.",
-    "Beautiful. Just beautiful.",
-    "Good for you. Well, as always, three perfectly good charities have been deprived of money, here on Slack Jeopardy. I'm #{ENV["BOT_USERNAME"]}, and all of you should be ashamed of yourselves! Good night!",
-    "And welcome back to Slack Jeopardy. Because of what just happened before during the commercial, I'd like to apologize to all blind people and children.",
-    "Thank you, thank you. Moving on.",
-    "I really thought that was going to work.",
-    "For the last time, that is not a category.",
-    "Unbelievable.",
-    "Uh, I see. Get back to your podium.",
-    "You look pretty sure of yourself. Think you've got the right answer?",
-    "Welcome back to Slack Jeopardy. We've got a real barnburner on our hands here.",
-    "And welcome back to Slack Jeopardy. I'd like to once again remind our contestants that there are proper bathroom facilities located in the studio.",
-    "Welcome back to Slack Jeopardy. Once again, I'm going to recommend that our viewers watch something else.",
-    "Don't tell me what you believe in. I'll observe how you behave and I will make my own determination.",
-    "It's very important in life to know when to shut up. You should not be afraid of silence."
-  ].sample
+  res = ENV["GENERIC_RESPONSE"].split('","').sample
+  puts "Res is #{res}"
+  res.gsub! "BOT_USERNAME", ENV["BOT_USERNAME"]
+  res
 end
 
 def trebek_wrong_score
-  [  "Your score is now",
-  	 "That brings you down to",
-  	 "How much does that leave you with now?  Oh yes,",
-     "How much did you wager?  Ouch.  Well at least you have"
-  ].sample
+  ENV["SCORE_MALUS_UPDATE_RESPONSE"].split('","').sample
 end
+
+def trebek_right_score
+  ENV["SCORE_BONUS_UPDATE_RESPONSE"].split('","').sample
+end
+
 def trebek_wrong
-	[  "You're fast on the button, but your brain's not catching up!",
-     "Nope.  It will be goodbye for you today.",
-     "One of the main differences between regular shows and kids week is emotion.  As talented as you are, you havn't had very much experience with not winning.",
-     "Ah, if only you had been able to accumulate more money.",
-     "You were having difficulties with that signaling device.  I saw.  You won't be around for Final Jeopardy!",
-     "It's a shame you weren't faster on the signaling button in earlier rounds.",
-     "It's been happening a lot lately.  Two of the players get off to a good start, and you start off badly.",
-     "Sorry, Nope.  That's wrong.",
-     "You made a common error there.",
-     "Let me see if I can make you feel better. It's incorrect.",
-     "You've been up and down.  Mostly down.",
-     "Maybe the categories didn't agree with you last round.  Perhaps you will like them better in this round.",
-     "You'll will try to get yourself out of the whole...when we come back. ",
-     "That is incorrect.  And I think you suspected that was wrong.",
-     "Ooh, drawing a blank.  That'll cost you.",
-     "What we've discovered here on Jeopardy! about you: You don't know recent American history.  And by recent history I mean the past 50 years.",
-     "Yeah.  Incorrect.  You should have stuck with your original thought.",
-     "You know what they have to do in this Double Jeopardy! round.  First you have to get yourself out of the hole.",
-     "We have to penalize you and once again you are in a negative situation.",
-     "The way you said that is exactly the way a contestant on Wheel of Fortune would say it.",
-     "You have serious education problems.",
-     "Your mom cries when you succeed.  How is she dealing with a failure?",
-     "Nope.  Not good enough.  Not gonna help you.",
-     "Sorry, that ain't gonna do it.",
-     "You weren't able to come up with a correct response.",
-     "Two words of advice: get serious.",
-     "I feared some of you might put that down.  That is incorrect.",
-     "You've been burying a very deep hole.  Let's see if you can change that.",
-     "Well, THAT narrows it down.",
-     "It's very important in life to know when to shut up. You should not be afraid of silence.",
-     "I think what makes Jeopardy! special is that, among all the quiz and game shows out there, ours tends to encourage learning.",
-     "Hahahahaha... No.",
-     "They teach you that in school in Utah, huh?"
-   ].sample
+	ENV["WRONG_ANSWER_RESPONSE"].split('","').sample
 end
 
 def value_set
